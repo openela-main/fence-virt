@@ -1,0 +1,118 @@
+diff --color -uNr a/config/Makefile.am b/config/Makefile.am
+--- a/config/Makefile.am	2019-11-20 14:13:42.000000000 +0100
++++ b/config/Makefile.am	2022-11-22 10:12:51.764545658 +0100
+@@ -37,5 +37,8 @@
+ config.c: y.tab.c config.l
+ 	$(LEX) -oconfig.c $(srcdir)/config.l
+ 
++install-exec-hook:
++	chmod 600 $(DESTDIR)$(sysconfdir)/fence_virt.conf
++
+ clean-local:
+ 	rm -f config.tab.c config.tab.h config.c y.tab.c y.tab.h
+diff --color -uNr a/include/simpleconfig.h b/include/simpleconfig.h
+--- a/include/simpleconfig.h	2018-01-15 15:02:31.000000000 +0100
++++ b/include/simpleconfig.h	2022-11-22 10:15:06.440335062 +0100
+@@ -49,4 +49,8 @@
+ /* Frees a previously-allocated copy of our simple config object */
+ void sc_release(config_object_t *c);
+ 
++int check_file_permissions(const char *fname);
++
++int do_configure(config_object_t *config, const char *filename);
++
+ #endif
+diff --color -uNr a/include/simpleconfig.h.rej b/include/simpleconfig.h.rej
+--- a/include/simpleconfig.h.rej	1970-01-01 01:00:00.000000000 +0100
++++ b/include/simpleconfig.h.rej	2022-11-22 10:12:51.764545658 +0100
+@@ -0,0 +1,11 @@
++--- include/simpleconfig.h
+++++ include/simpleconfig.h
++@@ -49,6 +49,8 @@ config_object_t *sc_init(void);
++ /* Frees a previously-allocated copy of our simple config object */
++ void sc_release(config_object_t *c);
++ 
+++int check_file_permissions(const char *fname);
+++
++ int do_configure(config_object_t *config, const char *filename);
++ 
++ #endif
+diff --color -uNr a/server/config.c b/server/config.c
+--- a/server/config.c	2019-11-20 14:13:42.000000000 +0100
++++ b/server/config.c	2022-11-22 10:17:25.539150364 +0100
+@@ -11,6 +11,7 @@
+ #include <fcntl.h>
+ #include <net/if.h>
+ #include <arpa/inet.h>
++#include <errno.h>
+ 
+ #include "simpleconfig.h"
+ #include "static_map.h"
+@@ -590,6 +591,31 @@
+ 
+ 
+ int
++check_file_permissions(const char *fname)
++{
++	struct stat st;
++	mode_t file_perms = 0600;
++	int ret;
++
++	ret = stat(fname, &st);
++	if (ret != 0) {
++		printf("stat failed on file '%s': %s\n",
++			 fname, strerror(errno));
++		return 1;
++	}
++
++	if ((st.st_mode & 0777) != file_perms) {
++		printf("WARNING: invalid permissions on file "
++			 "'%s': has 0%o should be 0%o\n", fname,
++			 (unsigned int)(st.st_mode & 0777),
++			 (unsigned int)file_perms);
++		return 1;
++	}
++
++	return 0;
++}
++
++int
+ do_configure(config_object_t *config, const char *config_file)
+ {
+ 	FILE *fp = NULL;
+diff --color -uNr a/server/main.c b/server/main.c
+--- a/server/main.c	2019-11-27 09:19:52.000000000 +0100
++++ b/server/main.c	2022-11-22 10:19:06.647742990 +0100
+@@ -14,11 +14,12 @@
+ /* Local includes */
+ #include "simpleconfig.h"
+ #include "static_map.h"
++#include "xvm.h"
+ #include "server_plugin.h"
++#include "simple_auth.h"
+ #include "debug.h"
+ 
+ /* configure.c */
+-int do_configure(config_object_t *config, const char *filename);
+ int daemon_init(const char *prog, const char *pid_file, int nofork);
+ int daemon_cleanup(void);
+ 
+@@ -206,6 +207,18 @@
+ 		snprintf(pid_file, PATH_MAX, "/var/run/%s.pid", basename(argv[0]));
+ 	}
+ 
++	check_file_permissions(config_file);
++
++	sprintf(val, "listeners/%s/@key_file", listener_name);
++	if (sc_get(config, val,
++		   val, sizeof(val)-1) == 0) {
++		dbg_printf(1, "Got %s for key_file\n", val);
++	} else {
++		snprintf(val, sizeof(val), "%s", DEFAULT_KEY_FILE);
++	}
++
++	check_file_permissions(val);
++
+ 	openlog(basename(argv[0]), LOG_NDELAY | LOG_PID, LOG_DAEMON);
+ 
+ 	daemon_init(basename(argv[0]), pid_file, foreground);
